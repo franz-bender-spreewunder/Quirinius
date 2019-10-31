@@ -1,0 +1,19 @@
+{
+  "name": "labeler",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^6.0.3"
+  },
+  "dependencies": {
+    "electron-reload": "^1.5.0",
+    "pg": "^7.12.1"
+  }
+}

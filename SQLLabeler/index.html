@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Editor</title>
+    <style>
+        html {
+            background-color: hsl(0, 0%, 15%);
+            font-family: -apple-system, system-ui, BlinkMacSystemFont;
+            color: hsl(0, 0%, 70%);
+            font-size: 12px;
+        }
+
+        #main {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            top: 0;
+            left: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .path-selector {
+            display: flex;
+            align-items: center;
+            padding: 10px 15px 0 15px;
+        }
+
+        .path-selector .path {
+            padding: 5px 10px 6px 10px;
+            flex-grow: 1;
+            user-select: none;
+        }
+
+        .video {
+            margin: 0;
+            border-bottom: solid 0.5px hsl(0, 0%, 0%);
+            background-color: hsl(0, 0%, 10%);
+            flex-grow: 1;
+            user-select: none;
+        }
+
+        .attributes {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            padding: 10px 0 10px 15px;
+        }
+
+        .attributes button {
+            margin-right: 10px;
+            user-select: none;
+        }
+
+        .trimmer {
+            height: 80px;
+            margin: 0 0 15px 0;
+            user-select: none;
+        }
+
+        label, button {
+            background-color: hsl(0, 0%, 30%);
+            border: none;
+            outline: none;
+            color: hsl(0, 0%, 70%);
+            padding: 5px 10px 6px 10px;
+            border-radius: 5px;
+            border-top: solid 0.5px hsl(0, 0%, 33%);
+            border-bottom: solid 0.5px hsl(0, 0%, 20%);
+        }
+
+        label, button:active {
+            background-color: hsl(0, 0%, 25%);
+        }
+
+        input[type=file] {
+            display: none;
+        }
+
+        canvas {
+            position: absolute;
+        }
+
+    </style>
+</head>
+<body>
+<div id="main">
+    <div class="video">
+        <canvas id="preview-canvas"></canvas>
+    </div>
+    <div class="attributes">
+        <button class="rate">0</button>
+        <button class="rate">1</button>
+        <button class="rate">2</button>
+        <button class="rate">3</button>
+        <button class="rate">4</button>
+        <button class="rate">5</button>
+        <button class="rate">6</button>
+        <button class="rate">7</button>
+        <button class="rate">8</button>
+        <button class="rate">9</button>
+        <button class="rate">10</button>
+        <button class="rate">11</button>
+        <button class="rate">12</button>
+        <button class="rate">13</button>
+        <button class="rate">14</button>
+        <button class="rate">15</button>
+        <button class="rate">16</button>
+        <button class="rate">17</button>
+        <button class="rate">18</button>
+        <button class="rate">19</button>
+        <button class="rate">20</button>
+    </div>
+    <div class="trimmer">
+        <canvas id="trimmer-canvas"></canvas>
+    </div>
+</div>
+
+<script>
+    let path_raw, path_labeled;
+    let frames = [];
+    let trimmer_settings = {
+        start: 0,
+        end: 99,
+        length: 100,
+        mouse_down: false,
+        mouse_x: 0,
+        mouse_y: 0,
+        start_x: null,
+        temp_offset: null,
+        preview_frame: 0,
+        preview_last_update: 0,
+        preview_frame_rate: 30
+    };
+
+    let trimmer_canvas = document.getElementById('trimmer-canvas');
+    let trimmer_ctx = trimmer_canvas.getContext('2d');
+    let preview_canvas = document.getElementById('preview-canvas');
+    let preview_ctx = preview_canvas.getContext('2d');
+
+    function update() {
+        update_trimmer();
+        update_preview();
+    }
+
+    let rating_buttons = document.getElementsByClassName('rate');
+    for (let i = 0; i < rating_buttons.length; i++) {
+        rating_buttons[i].addEventListener('click', function (event) {
+            for (let j = 0; j < frames.length; j++) {
+                if (!frames[j] || frames[j].status === 'pending') {
+                    mainProcess.error();
+                    return;
+                }
+            }
+            let label = event.target.textContent;
+            let only_remove = frames.splice(0, trimmer_settings.start - 1);
+            let only_move = frames.splice(0, trimmer_settings.length);
+            only_move.forEach(f => f.label = label);
+            only_remove.forEach(f => f.image = null);
+            only_move.forEach(f => f.image = null);
+            if (only_move.length < trimmer_settings.length) {
+                only_remove.push(...only_move);
+                only_move = [];
+            }
+            mainProcess.write_files(only_remove, only_move, path_labeled);
+            trimmer_settings.start = 0;
+        });
+    }
+
+    function update_preview() {
+        let time = Date.now();
+        let diff = time - trimmer_settings.preview_last_update;
+        let frames = (diff / 1000.0) * trimmer_settings.preview_frame_rate;
+        if (frames >= 1) {
+            preview_ctx.clearRect(0, 0, preview_canvas.width, preview_canvas.height);
+            let frame = (trimmer_settings.preview_frame + frames) % trimmer_settings.length;
+
+            draw_frame(preview_ctx, frame + trimmer_settings.start, 0, 0, preview_canvas.width, preview_canvas.height);
+            trimmer_settings.preview_frame = frame;
+            trimmer_settings.preview_last_update = time;
+        }
+    }
+
+    function update_trimmer() {
+        trimmer_ctx.clearRect(0, 0, trimmer_canvas.width, trimmer_canvas.height);
+        if (trimmer_settings.mouse_down) {
+            if (trimmer_settings.start_x === null) {
+                trimmer_settings.start_x = trimmer_settings.mouse_x
+            }
+            let diff = trimmer_settings.mouse_x - trimmer_settings.start_x;
+            let height = 0.8 * trimmer_canvas.height;
+            let width = height * 1.333;
+            let roi = trimmer_canvas.width / 3.0;
+            let step_size = trimmer_settings.length / (roi / width);
+            trimmer_settings.temp_offset = -diff / width * step_size;
+        } else {
+            if (trimmer_settings.temp_offset !== null) {
+                trimmer_settings.start += Math.round(trimmer_settings.temp_offset);
+                trimmer_settings.start = Math.max(0, Math.min(frames.length, trimmer_settings.start));
+            }
+            trimmer_settings.start_x = null;
+            trimmer_settings.temp_offset = null;
+        }
+        draw_preview_frames();
+        requestAnimationFrame(update);
+    }
+
+    requestAnimationFrame(update);
+
+    function image_from_bytes(data) {
+        let x = document.createElement('canvas');
+        x.width = 32;
+        x.height = 24;
+        let x_ctx = x.getContext('2d');
+        let x_data = x_ctx.getImageData(0, 0, 32, 24);
+
+        for (let i = 0; i < x_data.data.length; i += 4) {
+            x_data.data[i] = data[i >> 2];
+            x_data.data[i + 1] = data[i >> 2];
+            x_data.data[i + 2] = data[i >> 2];
+            x_data.data[i + 3] = 255;
+        }
+
+        x_ctx.putImageData(x_data, 0, 0);
+        return x;
+    }
+
+    function closest_frame(i) {
+        let index = Math.round(i);
+        index = Math.max(0, index);
+        if (!frames[index] && !trimmer_settings.mouse_down) {
+            for (let j = index; j < index + 400; j++) {
+                if (!frames[j]) {
+                    frames[j] = {
+                        status: 'pending',
+                        image: null,
+                        id: null
+                    };
+                    (function (j) {
+                        mainProcess.requestFrame(j).then((data) => {
+                            frames[j] = {
+                                status: 'available',
+                                image: image_from_bytes(data.data),
+                                id: data.id
+                            }
+                        })
+                    })(j);
+                }
+            }
+        }
+        return frames[index];
+    }
+
+    function draw_preview_frames() {
+        let start = (trimmer_settings.start + (trimmer_settings.temp_offset !== null ? trimmer_settings.temp_offset : 0.0));
+        start = Math.max(0, Math.min(frames.length, start));
+
+        let height = 0.8 * trimmer_canvas.height;
+        let width = height * 1.333;
+        let roi = trimmer_canvas.width / 3.0;
+        let step_size = trimmer_settings.length / (roi / width);
+        let x_offset = roi - width * start / step_size;
+        let y_offset = (trimmer_canvas.height - height) / 2.0;
+
+        trimmer_ctx.strokeStyle = "hsl(0, 0%, 15%)";
+        trimmer_ctx.lineWidth = 2;
+
+        for (let i = 0; x_offset < trimmer_canvas.width; i += step_size) {
+            if (x_offset > -width) {
+                draw_frame(trimmer_ctx, i + step_size / 2.0, x_offset, y_offset, width, height);
+                trimmer_ctx.beginPath();
+                trimmer_ctx.moveTo(x_offset, y_offset);
+                trimmer_ctx.lineTo(x_offset, y_offset + height);
+                trimmer_ctx.stroke();
+            }
+            x_offset += width;
+        }
+
+        height = 0.9 * trimmer_canvas.height;
+        width = height * 1.333;
+        roi = trimmer_canvas.width / 3.0;
+        step_size = trimmer_settings.length / (roi / width);
+        y_offset = (trimmer_canvas.height - height) / 2.0;
+        let boxes = Math.ceil(trimmer_settings.length / step_size);
+        let box_width = boxes * width;
+        let box_offset = (box_width - roi) / 2.0;
+        x_offset = roi - box_offset;
+
+        for (let i = 0; i < boxes; i++) {
+            let progress = i / (boxes - 1) * trimmer_settings.length;
+            draw_frame(trimmer_ctx, start + progress, x_offset, y_offset, width, height);
+            x_offset += width;
+        }
+
+        trimmer_ctx.strokeStyle = "hsl(25, 80%, 60%)";
+        trimmer_ctx.lineWidth = 6;
+        roundRectBorderTop(trimmer_ctx, roi - box_offset - 3, y_offset - 2, box_width + 6, height + 6, 6, false, true);
+
+        trimmer_ctx.strokeStyle = "hsl(25, 80%, 20%)";
+        trimmer_ctx.lineWidth = 6;
+        roundRectBorderBottom(trimmer_ctx, roi - box_offset - 3, y_offset - 2, box_width + 6, height + 6, 6, false, true);
+
+        trimmer_ctx.strokeStyle = "hsl(25, 100%, 45%)";
+        trimmer_ctx.lineWidth = 6;
+        roundRect(trimmer_ctx, roi - box_offset - 3, y_offset-1, box_width + 6, height + 4, 6, false, true);
+    }
+
+    function draw_frame(ctx, i, x, y, width, height) {
+        let frame = closest_frame(i);
+        if (frame && frame.status === 'available') {
+            drawImageScaled(frame.image, ctx, x, y, width, height);
+            //ctx.drawImage(frame.image, x, y, width, height);
+        } else {
+            ctx.fillStyle = 'hsl(0, 0%, 20%)';
+            ctx.fillRect(x, y, width, height);
+        }
+    }
+
+    function drawImageScaled(img, ctx, x, y, w, h) {
+        let hRatio = w / img.width;
+        let vRatio = h / img.height;
+        let ratio = Math.min(hRatio, vRatio);
+        let centerShift_x = (w - img.width * ratio) / 2 + x;
+        let centerShift_y = (h - img.height * ratio) / 2 + y;
+        ctx.drawImage(img, 0, 0, img.width, img.height,
+            centerShift_x, centerShift_y, img.width * ratio, img.height * ratio);
+    }
+
+    trimmer_canvas.addEventListener('mousemove', function (event) {
+        trimmer_settings.mouse_x = event.clientX * window.devicePixelRatio;
+        trimmer_settings.mouse_y = event.clientY * window.devicePixelRatio;
+    }, false);
+
+    trimmer_canvas.addEventListener('mousedown', function (event) {
+        trimmer_settings.mouse_down = true;
+    }, false);
+
+    trimmer_canvas.addEventListener('mouseleave', function (event) {
+        trimmer_settings.mouse_down = false;
+    }, false);
+
+    trimmer_canvas.addEventListener('mouseup', function (event) {
+        trimmer_settings.mouse_down = false;
+    }, false);
+
+    window.onresize = function () {
+        let trimmer_rect = trimmer_canvas.parentElement.getBoundingClientRect();
+        trimmer_canvas.width = trimmer_rect.width * window.devicePixelRatio;
+        trimmer_canvas.height = trimmer_rect.height * window.devicePixelRatio;
+        trimmer_canvas.style.width = trimmer_rect.width + 'px';
+        trimmer_canvas.style.height = trimmer_rect.height + 'px';
+
+        let preview_rect = preview_canvas.parentElement.getBoundingClientRect();
+        preview_canvas.width = preview_rect.width * window.devicePixelRatio;
+        preview_canvas.height = preview_rect.height * window.devicePixelRatio;
+        preview_canvas.style.width = preview_rect.width + 'px';
+        preview_canvas.style.height = preview_rect.height + 'px';
+    };
+    window.onresize();
+
+    function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
+        if (typeof stroke == 'undefined') {
+            stroke = true;
+        }
+        if (typeof radius === 'undefined') {
+            radius = 5;
+        }
+        if (typeof radius === 'number') {
+            radius = {tl: radius, tr: radius, br: radius, bl: radius};
+        } else {
+            var defaultRadius = {tl: 0, tr: 0, br: 0, bl: 0};
+            for (var side in defaultRadius) {
+                radius[side] = radius[side] || defaultRadius[side];
+            }
+        }
+        ctx.beginPath();
+        ctx.moveTo(x + radius.tl, y);
+        ctx.lineTo(x + width - radius.tr, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius.tr);
+        ctx.lineTo(x + width, y + height - radius.br);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius.br, y + height);
+        ctx.lineTo(x + radius.bl, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius.bl);
+        ctx.lineTo(x, y + radius.tl);
+        ctx.quadraticCurveTo(x, y, x + radius.tl, y);
+        ctx.closePath();
+        if (fill) {
+            ctx.fill();
+        }
+        if (stroke) {
+            ctx.stroke();
+        }
+
+    }
+
+    function roundRectBorderTop(ctx, x, y, width, height, radius, fill, stroke) {
+        if (typeof stroke == 'undefined') {
+            stroke = true;
+        }
+        if (typeof radius === 'undefined') {
+            radius = 5;
+        }
+        if (typeof radius === 'number') {
+            radius = {tl: radius, tr: radius, br: radius, bl: radius};
+        } else {
+            var defaultRadius = {tl: 0, tr: 0, br: 0, bl: 0};
+            for (var side in defaultRadius) {
+                radius[side] = radius[side] || defaultRadius[side];
+            }
+        }
+        ctx.beginPath();
+        ctx.moveTo(x, y + radius.tl);
+        ctx.quadraticCurveTo(x, y, x + radius.tl, y);
+        ctx.moveTo(x + radius.tl, y);
+        ctx.lineTo(x + width - radius.tr, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius.tr);
+        if (fill) {
+            ctx.fill();
+        }
+        if (stroke) {
+            ctx.stroke();
+        }
+
+    }
+
+    function roundRectBorderBottom(ctx, x, y, width, height, radius, fill, stroke) {
+        if (typeof stroke == 'undefined') {
+            stroke = true;
+        }
+        if (typeof radius === 'undefined') {
+            radius = 5;
+        }
+        if (typeof radius === 'number') {
+            radius = {tl: radius, tr: radius, br: radius, bl: radius};
+        } else {
+            var defaultRadius = {tl: 0, tr: 0, br: 0, bl: 0};
+            for (var side in defaultRadius) {
+                radius[side] = radius[side] || defaultRadius[side];
+            }
+        }
+        ctx.beginPath();
+        ctx.moveTo(x + width, y + height - radius.br);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius.br, y + height);
+        ctx.lineTo(x + radius.bl, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius.bl);
+        if (fill) {
+            ctx.fill();
+        }
+        if (stroke) {
+            ctx.stroke();
+        }
+
+    }
+
+    const electron = require('electron');
+    const remote = electron.remote;
+    const mainProcess = remote.require('./main')
+
+</script>
+</body>
+</html>
